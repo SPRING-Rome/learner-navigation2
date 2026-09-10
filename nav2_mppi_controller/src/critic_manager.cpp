@@ -81,6 +81,7 @@ void CriticManager::evalTrajectoriesScores(
     stats_msg->critics.reserve(critics_.size());
     stats_msg->changed.reserve(critics_.size());
     stats_msg->costs_sum.reserve(critics_.size());
+    stats_msg->costs_normalized.reserve(critics_.size());
   }
 
   for (size_t i = 0; i < critics_.size(); ++i) {
@@ -105,6 +106,16 @@ void CriticManager::evalTrajectoriesScores(
       float costs_sum = cost_diff.sum();
       stats_msg->costs_sum.push_back(costs_sum);
       stats_msg->changed.push_back(costs_sum != 0.0f);
+      
+      // Calculate normalized cost contribution for this critic
+      // Normalize the cost_diff array and sum it
+      if (cost_diff.size() > 0) {
+        auto cost_diff_normalized = cost_diff - cost_diff.minCoeff();
+        float normalized_sum = cost_diff_normalized.sum();
+        stats_msg->costs_normalized.push_back(normalized_sum);
+      } else {
+        stats_msg->costs_normalized.push_back(0.0f);
+      }
     }
   }
 

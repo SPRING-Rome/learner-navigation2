@@ -15,6 +15,7 @@
 #include "nav2_mppi_controller/critics/path_follow_critic.hpp"
 
 #include <Eigen/Dense>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
 namespace mppi::critics
 {
@@ -32,6 +33,13 @@ void PathFollowCritic::initialize()
   getParam(offset_from_furthest_, "offset_from_furthest", 6);
   getParam(power_, "cost_power", 1);
   getParam(weight_, "cost_weight", 5.0f);
+
+  // Create publisher for reference path point visualization
+  auto node = parent_.lock();
+  if (node) {
+    reference_point_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+      parent_name_ + "/tracked_path_point", 1);
+  }
 }
 
 void PathFollowCritic::score(CriticData & data)
@@ -68,6 +76,21 @@ void PathFollowCritic::score(CriticData & data)
 
   const auto path_x = data.path.x(offsetted_idx);
   const auto path_y = data.path.y(offsetted_idx);
+
+  // Publish reference point pose
+  if (reference_point_pub_ && reference_point_pub_->get_subscription_count() > 0) {
+    auto node = parent_.lock();
+    if (node) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header.frame_id = costmap_ros_->getGlobalFrameID();
+      pose.header.stamp = node->now();
+      pose.pose.position.x = path_x;
+      pose.pose.position.y = path_y;
+      pose.pose.position.z = 0.0;
+      pose.pose.orientation.w = 1.0;
+      reference_point_pub_->publish(pose);
+    }
+  }
 
   const int && rightmost_idx = data.trajectories.x.cols() - 1;
   const auto last_x = data.trajectories.x.col(rightmost_idx);
