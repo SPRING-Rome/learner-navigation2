@@ -19,6 +19,8 @@
 
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -79,10 +81,30 @@ public:
     const builtin_interfaces::msg::Time & cmd_stamp);
 
   /**
-    * @brief Add candidate trajectories to visualize
+    * @brief Add candidate trajectories colored by total cost, published with visualize()
+    * in the "Total Cost" marker namespace
     * @param trajectories Candidate trajectories
+    * @param costs Per-trajectory costs used for coloring (green = lowest, red = highest,
+    * black = exactly the lethal cost, grey = above the lethal cost)
+    * @param stamp Timestamp of the markers
     */
-  void add(const models::Trajectories & trajectories, const std::string & marker_namespace);
+  void add(
+    const models::Trajectories & trajectories,
+    const Eigen::ArrayXf & costs,
+    const builtin_interfaces::msg::Time & stamp);
+
+  /**
+    * @brief Add candidate trajectories colored by each critic's own cost contribution,
+    * published with visualize() in one marker namespace per critic, so the critic to display
+    * can be selected at runtime in RViz
+    * @param trajectories Candidate trajectories
+    * @param critic_costs (critic name, per-trajectory cost) pairs
+    * @param stamp Timestamp of the markers
+    */
+  void addCriticCosts(
+    const models::Trajectories & trajectories,
+    const std::vector<std::pair<std::string, Eigen::ArrayXf>> & critic_costs,
+    const builtin_interfaces::msg::Time & stamp);
 
   /**
     * @brief Visualize the plan
@@ -96,6 +118,23 @@ public:
   void reset();
 
 protected:
+  /**
+    * @brief Append one cost-colored line strip marker per (strided) candidate trajectory
+    * @param costs Per-trajectory costs
+    * @param marker_namespace Marker namespace to publish the trajectories in
+    */
+  void addCostColoredTrajectories(
+    const models::Trajectories & trajectories,
+    const Eigen::ArrayXf & costs,
+    const std::string & marker_namespace,
+    const builtin_interfaces::msg::Time & stamp);
+
+  /**
+    * @brief Map a normalized cost in [0, 1] to a green-yellow-red color
+    */
+  static std_msgs::msg::ColorRGBA costToColor(float normalized);
+
+
   std::string frame_id_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>>
   trajectories_publisher_;
@@ -110,6 +149,7 @@ protected:
 
   size_t trajectory_step_{0};
   size_t time_step_{0};
+  float lethal_cost_{10000.0f};
 
   rclcpp::Logger logger_{rclcpp::get_logger("MPPIController")};
 };

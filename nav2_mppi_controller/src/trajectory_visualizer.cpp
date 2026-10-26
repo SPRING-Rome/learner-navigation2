@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 #include "nav2_mppi_controller/tools/trajectory_visualizer.hpp"
 
 namespace mppi
@@ -36,6 +42,7 @@ void TrajectoryVisualizer::on_configure(
 
   getParam(trajectory_step_, "trajectory_step", 5);
   getParam(time_step_, "time_step", 3);
+  getParam(lethal_cost_, "lethal_cost", 10000.0f);
 
   reset();
 }
@@ -104,28 +111,110 @@ void TrajectoryVisualizer::add(
 }
 
 void TrajectoryVisualizer::add(
-  const models::Trajectories & trajectories, const std::string & marker_namespace)
+  const models::Trajectories & trajectories,
+  const Eigen::ArrayXf & costs,
+  const builtin_interfaces::msg::Time & stamp)
 {
-  size_t n_rows = trajectories.x.rows();
-  size_t n_cols = trajectories.x.cols();
-  const float shape_1 = static_cast<float>(n_cols);
-  points_->markers.reserve(floor(n_rows / trajectory_step_) * floor(n_cols * time_step_));
+  if (trajectories_publisher_->get_subscription_count() == 0) {
+    return;
+  }
 
-  for (size_t i = 0; i < n_rows; i += trajectory_step_) {
-    for (size_t j = 0; j < n_cols; j += time_step_) {
-      const float j_flt = static_cast<float>(j);
-      float blue_component = 1.0f - j_flt / shape_1;
-      float green_component = j_flt / shape_1;
+  // Clear markers of previous cycles, e.g. critics that were not evaluated this time
+  visualization_msgs::msg::Marker clear_marker;
+  clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+  points_->markers.push_back(clear_marker);
 
-      auto pose = utils::createPose(trajectories.x(i, j), trajectories.y(i, j), 0.03);
-      auto scale = utils::createScale(0.03, 0.03, 0.03);
-      auto color = utils::createColor(0, green_component, blue_component, 1);
-      auto marker = utils::createMarker(
-        marker_id_++, pose, scale, color, frame_id_, marker_namespace);
+  addCostColoredTrajectories(trajectories, costs, "Total Cost", stamp);
+}
 
-      points_->markers.push_back(marker);
+void TrajectoryVisualizer::addCriticCosts(
+  const models::Trajectories & trajectories,
+  const std::vector<std::pair<std::string, Eigen::ArrayXf>> & critic_costs,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  if (trajectories_publisher_->get_subscription_count() == 0) {
+    return;
+  }
+
+  for (const auto & [name, costs] : critic_costs) {
+    addCostColoredTrajectories(trajectories, costs, name, stamp);
+  }
+}
+
+void TrajectoryVisualizer::addCostColoredTrajectories(
+  const models::Trajectories & trajectories,
+  const Eigen::ArrayXf & costs,
+  const std::string & marker_namespace,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  using visualization_msgs::msg::Marker;
+  const size_t n_rows = trajectories.x.rows();
+  const size_t n_cols = trajectories.x.cols();
+  if (n_rows == 0 || static_cast<size_t>(costs.size()) < n_rows) {
+    return;
+  }
+
+  // Per-critic costs are float differences (after - before), so allow for rounding
+  const float lethal_tolerance = 0.05f;
+
+  // Normalize over non-lethal trajectories only, so lethal costs don't wash out the gradient
+  float min_val = std::numeric_limits<float>::max();
+  float max_val = std::numeric_limits<float>::lowest();
+  for (size_t k = 0; k < n_rows; ++k) {
+    if (costs(k) < lethal_cost_ - lethal_tolerance) {
+      min_val = std::min(min_val, costs(k));
+      max_val = std::max(max_val, costs(k));
     }
   }
+  const float range = max_val - min_val;
+
+  points_->markers.reserve(points_->markers.size() + n_rows / trajectory_step_ + 1);
+  for (size_t i = 0; i < n_rows; i += trajectory_step_) {
+    Marker marker;
+    marker.header.frame_id = frame_id_;
+    marker.header.stamp = stamp;
+    marker.ns = marker_namespace;
+    marker.id = marker_id_++;
+    marker.type = Marker::LINE_STRIP;
+    marker.action = Marker::ADD;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.01;  // line width
+    if (std::abs(costs(i) - lethal_cost_) <= lethal_tolerance) {
+      // Marked lethal by a critic
+      marker.color = utils::createColor(0.0f, 0.0f, 0.0f, 1.0f);
+    } else if (costs(i) > lethal_cost_) {
+      // Lethal by accumulated cost: grey (non-zero blue distinguishes it from the black/colormap)
+      marker.color = utils::createColor(0.5f, 0.5f, 0.5f, 1.0f);
+    } else {
+      marker.color = costToColor(range > 0.0f ? (costs(i) - min_val) / range : 0.0f);
+    }
+
+    marker.points.reserve(n_cols / time_step_ + 1);
+    for (size_t j = 0; j < n_cols; j += time_step_) {
+      geometry_msgs::msg::Point pt;
+      pt.x = trajectories.x(i, j);
+      pt.y = trajectories.y(i, j);
+      pt.z = 0.03;
+      marker.points.push_back(pt);
+    }
+
+    points_->markers.push_back(std::move(marker));
+  }
+}
+
+std_msgs::msg::ColorRGBA TrajectoryVisualizer::costToColor(float normalized)
+{
+  // Green (0) -> Yellow (0.5) -> Red (1.0)
+  normalized = std::clamp(normalized, 0.0f, 1.0f);
+  float r, g;
+  if (normalized < 0.5f) {
+    r = 2.0f * normalized;
+    g = 1.0f;
+  } else {
+    r = 1.0f;
+    g = 2.0f * (1.0f - normalized);
+  }
+  return utils::createColor(r, g, 0.0f, 0.8f);
 }
 
 void TrajectoryVisualizer::reset()

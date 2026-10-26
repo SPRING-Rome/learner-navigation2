@@ -30,6 +30,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BehaviorTreeStatusChange.msg"
   "msg/BehaviorTreeLog.msg"
   "msg/CriticsStats.msg"
+  "msg/CriticCosts.msg"
+  "msg/CriticsDebug.msg"
   "msg/Particle.msg"
   "msg/ParticleCloud.msg"
   "msg/WaypointStatus.msg"

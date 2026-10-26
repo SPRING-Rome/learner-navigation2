@@ -196,6 +196,9 @@ void ObstaclesCritic::score(CriticData & data)
   }
 
   data.fail_flag = all_trajectories_collide;
+  if (all_trajectories_collide) {
+    data.fail_reason = "all trajectories collide with an obstacle";
+  }
 }
 
 /**

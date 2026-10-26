@@ -59,6 +59,7 @@ This process is then repeated a number of times and returns a converged solution
  | retry_attempt_limit        | int    | Default 1. Number of attempts to find feasible trajectory on failure for soft-resets before reporting failure.                                                                                                                                                                                                       |
  | regenerate_noises          | bool   | Default false. Whether to regenerate noises each iteration or use single noise distribution computed on initialization and reset. Practically, this is found to work fine since the trajectories are being sampled stochastically from a normal distribution and reduces compute jittering at run-time due to thread wake-ups to resample normal distribution. |
  | publish_optimal_trajectory | bool   | Publishes the full optimal trajectory sequence each control iteration for downstream  control systems, collision checkers, etc to have context beyond the next timestep. |
+ | publish_critics_debug | bool | Default false. Whether to publish `~/critics_debug` (`nav2_msgs::msg::CriticsDebug`) with all sampled trajectories and the cost each critic added to every one of them. Only computed and published while the topic has subscribers. |
  | publish_critics_stats | bool | Default false. Whether to publish statistics about each critic's performance. When enabled, publishes a `nav2_msgs::msg::CriticsStats` message containing critic names, whether they changed costs, and the sum of costs added by each critic. Useful for debugging and tuning critic behavior. |
 
 
@@ -67,6 +68,7 @@ This process is then repeated a number of times and returns a converged solution
  | ---------------       | ------ | ----------------------------------------------------------------------------------------------------------- |
  | trajectory_step       | int    | Default: 5. The step between trajectories to visualize to downsample candidate trajectory pool.             |
  | time_step             | int    | Default: 3. The step between points on trajectories to visualize to downsample trajectory density.          |
+ | lethal_cost           | double | Default: 10000.0. Trajectories whose (total or per-critic) cost is at or above this value are drawn black (exactly equal) or grey (above).   |
 
 #### Path Handler
  | Parameter                  | Type   | Definition                                                                                                  |
@@ -295,6 +297,7 @@ controller_server:
 | `trajectories`            | `visualization_msgs/MarkerArray` | Randomly generated trajectories, including resulting control sequence |
 | `transformed_global_plan` | `nav_msgs/Path`                  | Part of global plan considered by local planner                       |
 | `critics_stats` | `nav2_msgs/CriticsStats` | Statistics about each critic's performance (published when `publish_critics_stats` is enabled) |
+| `critics_debug` | `nav2_msgs/CriticsDebug` | All sampled trajectories with the cost of every trajectory for each critic (published when `publish_critics_debug` is enabled and the topic has subscribers) |
 
 ## Notes to Users
 
@@ -334,6 +337,10 @@ Once you have your obstacle avoidance behavior tuned and matched with an appropr
 
 The `publish_critics_stats` parameter enables publishing of statistics about each critic's performance, which can be visualized using tools like PlotJuggler or Foxglove to analyze and debug critic behavior.
 
+To see what each critic is evaluating, set `visualize: true` and add a MarkerArray display in RViz on `~/candidate_trajectories`. All candidate trajectories are published as line strips in one message, with one marker namespace per cost: `Total Cost` and one per entry in `critics` (that critic's own cost contribution), plus `Optimal Trajectory`. Tick the namespaces to display in the display's *Namespaces* list; switching is instant since RViz keeps the last message.
+
+Trajectories go from green (lowest cost) to red (highest cost); black trajectories have a cost exactly equal to `TrajectoryVisualizer.lethal_cost` (marked lethal) and grey ones a cost above it (lethal by accumulated cost). Colors are normalized per namespace and per cycle, excluding lethal trajectories. Showing a single namespace at a time is recommended, since all namespaces overlap. Publishing every critic multiplies the message size, so increase `trajectory_step` and `time_step` if it is too heavy.
+
 The published `nav2_msgs::msg::CriticsStats` message contains the following fields:
 
 - **stamp**: Timestamp of when the statistics were computed
@@ -346,7 +353,17 @@ This data is invaluable for understanding:
 - The relative impact of each critic on the final trajectory choice
 - Whether critics are working as expected or if parameter tuning is needed (e.g. `threshold_to_consider`)
 
-More detailed statistics could be added in the future.
+For per-trajectory analysis (not for RViz), enable `publish_critics_debug` to publish `nav2_msgs::msg::CriticsDebug` on `~/critics_debug`. It is a separate message because it is large (all sampled trajectories) and is only built while it has subscribers, whereas `CriticsStats` is a small summary meant for plotting at the control rate. It contains, for the last optimizer iteration of the cycle:
+
+- **header**: stamp of the velocity command and frame of the trajectories
+- **cycle_id**, **retry**, **result**: the control cycle (counted from 1), the attempt in that cycle (0 first, then one per retry after a failure) and its outcome: `RESULT_SUCCESS`, `RESULT_RETRY` (a critic set the fail flag, the optimizer is reset and tries again) or `RESULT_NO_VALID_CONTROL` (no retry left, `NoValidControl` is thrown). Failed attempts are published too, captured before the reset
+- **failed_critic**, **fail_reason**: the critic that set the fail flag and the reason it gave in `CriticData::fail_reason`. Critics that set `fail_flag` should also fill `fail_reason`; empty on success. On a retry attempt no critic is evaluated, and the failure of the previous attempt is reported
+- **batch_size**, **time_steps**, **model_dt**: shape of the sampled trajectories
+- **critics**: for each critic in evaluation order, its **name**, the cost it added to each trajectory (**costs**) and an optional text for each trajectory (**debug_info**, empty if the critic gives none, set through `CriticData::debug_info`, e.g. the worst case found by RockCritic) and its run time in milliseconds (**duration_ms**)
+- **control_costs**: cost added by the optimizer itself (control sequence regularization), which belongs to no critic
+- **total_costs**, **weights**: final cost and softmax weight of each trajectory
+- **x**, **y**, **yaw**: sampled trajectories, row-major `[batch_size x time_steps]`
+- **robot_pose**, **robot_speed**, **goal**: robot state and goal used in the cycle
 
 ![critics_stats](media/critics_stats.png)
 

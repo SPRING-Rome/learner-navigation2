@@ -73,8 +73,25 @@ std::string CriticManager::getFullName(const std::string & name)
 }
 
 void CriticManager::evalTrajectoriesScores(
-  CriticData & data) const
+  CriticData & data)
 {
+  if (collect_critic_info_) {
+    critic_costs_.clear();
+    critic_costs_.reserve(critics_.size());
+    critic_durations_ms_.clear();
+    critic_durations_ms_.reserve(critics_.size());
+    critic_debug_info_.clear();
+    critic_debug_info_.reserve(critics_.size());
+  }
+  data.collect_debug_info = collect_critic_info_;
+
+  // A flag left over from a failed attempt means no critic runs: keep the attribution
+  if (!data.fail_flag) {
+    failed_critic_.clear();
+    fail_reason_.clear();
+    data.fail_reason.clear();
+  }
+
   std::unique_ptr<nav2_msgs::msg::CriticsStats> stats_msg;
   if (publish_critics_stats_) {
     stats_msg = std::make_unique<nav2_msgs::msg::CriticsStats>();
@@ -91,18 +108,31 @@ void CriticManager::evalTrajectoriesScores(
 
     // Store costs before critic evaluation
     Eigen::ArrayXf costs_before;
-    if (publish_critics_stats_) {
+    if (publish_critics_stats_ || collect_critic_info_) {
       costs_before = data.costs;
     }
 
+    data.debug_info.clear();
+    const auto start = std::chrono::steady_clock::now();
     critics_[i]->score(data);
+    const auto end = std::chrono::steady_clock::now();
+
+    if (data.fail_flag) {
+      failed_critic_ = critic_names_[i];
+      fail_reason_ = data.fail_reason;
+    }
+
+    if (!(publish_critics_stats_ || collect_critic_info_)) {
+      continue;
+    }
+
+    // Costs added by this individual critic
+    Eigen::ArrayXf cost_diff = data.costs - costs_before;
 
     // Calculate statistics if publishing is enabled
     if (publish_critics_stats_) {
       stats_msg->critics.push_back(critic_names_[i]);
 
-      // Calculate sum of costs added by this individual critic
-      Eigen::ArrayXf cost_diff = data.costs - costs_before;
       float costs_sum = cost_diff.sum();
       stats_msg->costs_sum.push_back(costs_sum);
       stats_msg->changed.push_back(costs_sum != 0.0f);
@@ -116,6 +146,14 @@ void CriticManager::evalTrajectoriesScores(
       } else {
         stats_msg->costs_normalized.push_back(0.0f);
       }
+    }
+
+    if (collect_critic_info_) {
+      critic_costs_.emplace_back(critic_names_[i], std::move(cost_diff));
+      critic_durations_ms_.push_back(
+        std::chrono::duration<float, std::milli>(end - start).count());
+      critic_debug_info_.push_back(std::move(data.debug_info));
+      data.debug_info.clear();
     }
   }
 

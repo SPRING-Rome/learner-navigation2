@@ -28,8 +28,18 @@ class DummyCritic : public CriticFunction
 {
 public:
   virtual void initialize() {initialized_ = true;}
-  virtual void score(CriticData & /*data*/) {scored_ = true;}
-  bool initialized_{false}, scored_{false};
+  virtual void score(CriticData & data)
+  {
+    scored_ = true;
+    if (data.collect_debug_info) {
+      data.debug_info.assign(data.costs.size(), "dummy info");
+    }
+    if (fail_) {
+      data.fail_flag = true;
+      data.fail_reason = "dummy failure";
+    }
+  }
+  bool initialized_{false}, scored_{false}, fail_{false};
 };
 
 class CriticManagerWrapper : public CriticManager
@@ -63,6 +73,11 @@ public:
     }
     const auto dummy_critic = dynamic_cast<DummyCritic *>(critic);
     return dummy_critic == nullptr ? false : dummy_critic->initialized_;
+  }
+
+  void setDummyCriticFail(bool fail)
+  {
+    dynamic_cast<DummyCritic *>(critics_[0].get())->fail_ = fail;
   }
 
   bool getDummyCriticScored()
@@ -125,6 +140,57 @@ TEST(CriticManagerTests, BasicCriticOperations)
 
   // This should get the full namespaced name of the critics
   EXPECT_EQ(critic_manager.getFullNameWrapper("name"), std::string("mppi::critics::name"));
+}
+
+TEST(CriticManagerTests, FailedCriticAttribution)
+{
+  auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("my_node");
+  node->declare_parameter(
+    "critic_manager.critics", rclcpp::ParameterValue(std::vector<std::string>{"DummyCritic"}));
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  std::string name = "test";
+  ParametersHandler param_handler(node, name);
+  rclcpp_lifecycle::State lstate;
+  costmap_ros->on_configure(lstate);
+
+  CriticManagerWrapper critic_manager;
+  critic_manager.on_configure(node, "critic_manager", costmap_ros, &param_handler);
+  critic_manager.setCollectCriticInfo(true);
+
+  models::State state;
+  models::Trajectories generated_trajectories;
+  models::Path path;
+  geometry_msgs::msg::Pose goal;
+  Eigen::ArrayXf costs = Eigen::ArrayXf::Zero(3);
+  float model_dt = 0.1;
+  CriticData data =
+  {state, generated_trajectories, path, goal, costs, model_dt, false, nullptr, nullptr,
+    std::nullopt, std::nullopt};
+
+  critic_manager.evalTrajectoriesScores(data);
+  EXPECT_TRUE(critic_manager.getFailedCritic().empty());
+  EXPECT_EQ(critic_manager.getCriticDurationsMs().size(), 1u);
+  ASSERT_EQ(critic_manager.getCriticDebugInfo().size(), 1u);
+  ASSERT_EQ(critic_manager.getCriticDebugInfo()[0].size(), 3u);
+  EXPECT_EQ(critic_manager.getCriticDebugInfo()[0][2], "dummy info");
+
+  critic_manager.setDummyCriticFail(true);
+  critic_manager.evalTrajectoriesScores(data);
+  EXPECT_TRUE(data.fail_flag);
+  EXPECT_EQ(critic_manager.getFailedCritic(), "DummyCritic");
+  EXPECT_EQ(critic_manager.getFailReason(), "dummy failure");
+
+  // The flag is still set: no critic is evaluated and the attribution is kept
+  critic_manager.evalTrajectoriesScores(data);
+  EXPECT_EQ(critic_manager.getFailedCritic(), "DummyCritic");
+
+  // New cycle
+  data.fail_flag = false;
+  critic_manager.setDummyCriticFail(false);
+  critic_manager.evalTrajectoriesScores(data);
+  EXPECT_TRUE(critic_manager.getFailedCritic().empty());
+  EXPECT_TRUE(critic_manager.getFailReason().empty());
 }
 
 TEST(CriticManagerTests, CriticLoadingTest)

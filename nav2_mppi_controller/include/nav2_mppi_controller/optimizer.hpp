@@ -17,8 +17,11 @@
 
 #include <Eigen/Dense>
 
+#include <functional>
 #include <string>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 
@@ -110,6 +113,109 @@ public:
    * @return Optimal control sequence
    */
   const models::ControlSequence & getOptimalControlSequence();
+
+  /**
+   * @brief Enable or disable collection of per-critic costs and other debug information
+   * (control costs, softmax weights) for visualization and the debug topic
+   * @param collect Whether to collect debug information
+   */
+  void setCollectDebugInfo(bool collect)
+  {
+    collect_debug_info_ = collect;
+    critic_manager_.setCollectCriticInfo(collect);
+  }
+
+  /**
+   * @brief Get the per-critic run times from last evaluation
+   * @return Run time of each critic in milliseconds, same order as getCriticCosts()
+   */
+  const std::vector<float> & getCriticDurationsMs() const
+  {
+    return critic_manager_.getCriticDurationsMs();
+  }
+
+  /**
+   * @brief Get the cost added by the optimizer itself (control sequence regularization)
+   * in the last iteration (filled when debug collection is enabled)
+   */
+  const Eigen::ArrayXf & getControlCosts() const {return control_costs_;}
+
+  /**
+   * @brief Get the softmax weights of the trajectories in the last iteration
+   * (filled when debug collection is enabled)
+   */
+  const Eigen::ArrayXf & getWeights() const {return weights_;}
+
+  /**
+   * @brief Callback invoked when an attempt failed, before the optimizer is reset, so that the
+   * costs and trajectories of the failed attempt can still be read
+   * @param fatal True if no retry is left and NoValidControl is thrown next
+   */
+  using FailureCallback = std::function<void (bool fatal)>;
+
+  /**
+   * @brief Set the callback invoked on failed attempts, only while debug collection is enabled
+   */
+  void setFailureCallback(FailureCallback callback) {failure_callback_ = std::move(callback);}
+
+  /**
+   * @brief Get the id of the current cycle (one per evalControl call, starting at 1)
+   */
+  uint32_t getCycleId() const {return cycle_id_;}
+
+  /**
+   * @brief Get the attempt of the current cycle, 0 for the first one and 1 for the first retry
+   */
+  uint32_t getAttempt() const {return attempt_;}
+
+  /**
+   * @brief Get the name of the critic that failed the last evaluation, empty if none
+   */
+  const std::string & getFailedCritic() const {return critic_manager_.getFailedCritic();}
+
+  /**
+   * @brief Get the reason of the failure of the last evaluation, empty if none or not given
+   */
+  const std::string & getFailReason() const {return critic_manager_.getFailReason();}
+
+  /**
+   * @brief Get the robot pose used in the last cycle
+   */
+  const geometry_msgs::msg::Pose & getRobotPose() const {return state_.pose.pose;}
+
+  /**
+   * @brief Get the robot speed used in the last cycle
+   */
+  const geometry_msgs::msg::Twist & getRobotSpeed() const {return state_.speed;}
+
+  /**
+   * @brief Get the goal used in the last cycle
+   */
+  const geometry_msgs::msg::Pose & getGoal() const {return goal_;}
+
+  /**
+   * @brief Get the aggregated trajectory costs from last evaluation
+   * @return Array of costs per trajectory
+   */
+  const Eigen::ArrayXf & getCosts() const {return costs_;}
+
+  /**
+   * @brief Get per-critic cost breakdown from last evaluation
+   * @return Vector of (critic_name, cost_array) pairs
+   */
+  const std::vector<std::pair<std::string, Eigen::ArrayXf>> & getCriticCosts() const
+  {
+    return critic_manager_.getCriticCosts();
+  }
+
+  /**
+   * @brief Get per-critic debug text of each trajectory from last evaluation
+   * @return One vector per critic, same order as getCriticCosts(): empty or one string per trajectory
+   */
+  const std::vector<std::vector<std::string>> & getCriticDebugInfo() const
+  {
+    return critic_manager_.getCriticDebugInfo();
+  }
 
   /**
    * @brief Set the maximum speed based on the speed limits callback
@@ -270,6 +376,13 @@ protected:
   models::Path path_;
   geometry_msgs::msg::Pose goal_;
   Eigen::ArrayXf costs_;
+  Eigen::ArrayXf control_costs_;
+  Eigen::ArrayXf weights_;
+  bool collect_debug_info_{false};
+  FailureCallback failure_callback_;
+  uint32_t cycle_id_{0};
+  uint32_t attempt_{0};
+  size_t fallback_counter_{0};
 
   CriticData critics_data_ = {
     state_, generated_trajectories_, path_, goal_,

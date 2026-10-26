@@ -15,8 +15,12 @@
 #ifndef NAV2_MPPI_CONTROLLER__CRITIC_MANAGER_HPP_
 #define NAV2_MPPI_CONTROLLER__CRITIC_MANAGER_HPP_
 
+#include <Eigen/Dense>
+
+#include <chrono>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 #include <pluginlib/class_loader.hpp>
 
@@ -69,7 +73,51 @@ public:
     * @brief Score trajectories by the set of loaded critic functions
     * @param CriticData Struct of necessary information to pass to the critic functions
     */
-  void evalTrajectoriesScores(CriticData & data) const;
+  void evalTrajectoriesScores(CriticData & data);
+
+  /**
+    * @brief Enable or disable storing per-critic costs and run times (visualization, debug topic)
+    * @param collect Whether to collect per-critic information
+    */
+  void setCollectCriticInfo(bool collect) {collect_critic_info_ = collect;}
+
+  /**
+    * @brief Get stored per-critic costs from last evaluation (filled when collection is enabled)
+    * @return Vector of (critic_name, cost_array) pairs
+    */
+  const std::vector<std::pair<std::string, Eigen::ArrayXf>> & getCriticCosts() const
+  {
+    return critic_costs_;
+  }
+
+  /**
+    * @brief Get per-trajectory debug text of each critic from the last evaluation (filled when
+    * collection is enabled)
+    * @return One vector per critic, same order as getCriticCosts(): empty if the critic gave no
+    * text, otherwise one string per trajectory
+    */
+  const std::vector<std::vector<std::string>> & getCriticDebugInfo() const
+  {
+    return critic_debug_info_;
+  }
+
+  /**
+    * @brief Get per-critic run times of the last evaluation (filled when collection is enabled)
+    * @return Run time of each critic score() call in milliseconds, same order as getCriticCosts()
+    */
+  const std::vector<float> & getCriticDurationsMs() const {return critic_durations_ms_;}
+
+  /**
+    * @brief Get the name of the critic that set the fail flag in the last evaluation
+    * @return Critic name, empty if no critic failed
+    */
+  const std::string & getFailedCritic() const {return failed_critic_;}
+
+  /**
+    * @brief Get the reason given by the critic that set the fail flag
+    * @return Reason, empty if no critic failed or the critic gave none
+    */
+  const std::string & getFailReason() const {return fail_reason_;}
 
 protected:
   /**
@@ -101,6 +149,12 @@ protected:
     critics_effect_pub_;
 
   bool publish_critics_stats_;
+  bool collect_critic_info_{false};
+  std::vector<std::pair<std::string, Eigen::ArrayXf>> critic_costs_;
+  std::vector<std::vector<std::string>> critic_debug_info_;
+  std::vector<float> critic_durations_ms_;
+  std::string failed_critic_;
+  std::string fail_reason_;
 
   rclcpp::Logger logger_{rclcpp::get_logger("MPPIController")};
 };

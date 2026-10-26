@@ -193,17 +193,23 @@ void Optimizer::optimize()
 
 bool Optimizer::fallback(bool fail)
 {
-  static size_t counter = 0;
-
   if (!fail) {
-    counter = 0;
+    fallback_counter_ = 0;
     return false;
+  }
+
+  const bool fatal = fallback_counter_ + 1 > settings_.retry_attempt_limit;
+  if (collect_debug_info_ && failure_callback_) {
+    // Before reset() destroys the costs and trajectories of the failed attempt
+    failure_callback_(fatal);
   }
 
   reset();
 
-  if (++counter > settings_.retry_attempt_limit) {
-    counter = 0;
+  ++fallback_counter_;
+  ++attempt_;
+  if (fatal) {
+    fallback_counter_ = 0;
     throw nav2_core::NoValidControl("Optimizer fail to compute path");
   }
 
@@ -217,6 +223,8 @@ void Optimizer::prepare(
   const geometry_msgs::msg::Pose & goal,
   nav2_core::GoalChecker * goal_checker)
 {
+  ++cycle_id_;
+  attempt_ = 0;
   state_.pose = robot_pose;
   state_.speed = robot_speed;
   path_ = utils::toTensor(plan);
@@ -443,6 +451,10 @@ void Optimizer::updateControlSequence()
   const bool is_holo = isHolonomic();
   auto & s = settings_;
 
+  if (collect_debug_info_) {
+    control_costs_ = costs_;
+  }
+
   auto vx_T = control_sequence_.vx.transpose();
   auto bounded_noises_vx = state_.cvx.rowwise() - vx_T;
   const float gamma_vx = s.gamma / (s.sampling_std.vx * s.sampling_std.vx);
@@ -466,6 +478,11 @@ void Optimizer::updateControlSequence()
   const float inv_temp = 1.0f / s.temperature;
   auto softmaxes = (-inv_temp * costs_normalized).exp().eval();
   softmaxes /= softmaxes.sum();
+
+  if (collect_debug_info_) {
+    control_costs_ = costs_ - control_costs_;
+    weights_ = softmaxes;
+  }
 
   auto softmax_mat = softmaxes.matrix();
   control_sequence_.vx = state_.cvx.transpose().matrix() * softmax_mat;

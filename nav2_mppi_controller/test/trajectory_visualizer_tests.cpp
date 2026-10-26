@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <chrono>
+#include <set>
 #include <thread>
 
 #include "gtest/gtest.h"
@@ -142,13 +143,97 @@ TEST(TrajectoryVisualizerTests, VisCandidateTrajectories)
   TrajectoryVisualizer vis;
   vis.on_configure(node, "my_name", "fkmap", parameters_handler.get());
   vis.on_activate();
-  vis.add(candidate_trajectories, "Candidate Trajectories");
+  // Costs 0..198 normal, trajectory 5 lethal
+  Eigen::ArrayXf costs = Eigen::ArrayXf::LinSpaced(200, 0.0f, 199.0f);
+  costs(5) = 20000.0f;
+  costs(10) = 10000.0f;
+  builtin_interfaces::msg::Time stamp;
+  stamp.sec = 3;
+
+  vis.add(candidate_trajectories, costs, stamp);
   nav_msgs::msg::Path bogus_path;
   vis.visualize(bogus_path);
 
   rclcpp::spin_some(node->get_node_base_interface());
-  // 40 * 4, for 5 trajectory steps + 3 point steps
-  EXPECT_EQ(received_msg.markers.size(), 160u);
+  // One line strip per 5th trajectory, 4 points each for 3 point steps
+  // plus a leading DELETEALL marker
+  ASSERT_EQ(received_msg.markers.size(), 41u);
+  EXPECT_EQ(received_msg.markers[0].action, visualization_msgs::msg::Marker::DELETEALL);
+  received_msg.markers.erase(received_msg.markers.begin());
+  EXPECT_EQ(received_msg.markers[0].type, visualization_msgs::msg::Marker::LINE_STRIP);
+  EXPECT_EQ(received_msg.markers[0].ns, "Total Cost");
+  EXPECT_EQ(received_msg.markers[0].points.size(), 4u);
+  EXPECT_EQ(received_msg.markers[0].header.stamp.sec, 3);
+
+  // Lowest cost is green, highest non-lethal is red, exactly lethal is black, above lethal is grey
+  EXPECT_FLOAT_EQ(received_msg.markers[0].color.g, 1.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[0].color.r, 0.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[39].color.r, 1.0f);
+  EXPECT_LT(received_msg.markers[39].color.g, 0.1f);
+  EXPECT_FLOAT_EQ(received_msg.markers[1].color.r, 0.5f);
+  EXPECT_FLOAT_EQ(received_msg.markers[1].color.g, 0.5f);
+  EXPECT_FLOAT_EQ(received_msg.markers[1].color.b, 0.5f);
+  EXPECT_FLOAT_EQ(received_msg.markers[2].color.r, 0.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[2].color.g, 0.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[2].color.b, 0.0f);
+}
+
+TEST(TrajectoryVisualizerTests, VisCriticCandidateTrajectories)
+{
+  auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("my_node");
+  std::string name = "test";
+  auto parameters_handler = std::make_unique<ParametersHandler>(node, name);
+
+  visualization_msgs::msg::MarkerArray received_msg;
+  auto my_sub = node->create_subscription<visualization_msgs::msg::MarkerArray>(
+    "~/candidate_trajectories", 10,
+    [&](const visualization_msgs::msg::MarkerArray msg) {received_msg = msg;});
+
+  models::Trajectories candidate_trajectories;
+  candidate_trajectories.x = Eigen::ArrayXXf::Ones(200, 12);
+  candidate_trajectories.y = Eigen::ArrayXXf::Ones(200, 12);
+  candidate_trajectories.yaws = Eigen::ArrayXXf::Ones(200, 12);
+
+  TrajectoryVisualizer vis;
+  vis.on_configure(node, "my_name", "fkmap", parameters_handler.get());
+  vis.on_activate();
+
+  Eigen::ArrayXf costs_a = Eigen::ArrayXf::LinSpaced(200, 0.0f, 199.0f);
+  Eigen::ArrayXf costs_b = Eigen::ArrayXf::Zero(200);
+  costs_b(0) = 50000.0f;
+  costs_b(5) = 10000.0f;
+  std::vector<std::pair<std::string, Eigen::ArrayXf>> critic_costs = {
+    {"CriticA", costs_a}, {"CriticB", costs_b}};
+  builtin_interfaces::msg::Time stamp;
+  vis.add(candidate_trajectories, costs_a, stamp);
+  vis.addCriticCosts(candidate_trajectories, critic_costs, stamp);
+  nav_msgs::msg::Path bogus_path;
+  vis.visualize(bogus_path);
+
+  rclcpp::spin_some(node->get_node_base_interface());
+  // DELETEALL + 40 markers for each of the total and the 2 critics
+  ASSERT_EQ(received_msg.markers.size(), 121u);
+
+  // Total: 1..40, CriticA: 41..80, CriticB: 81..120
+  EXPECT_EQ(received_msg.markers[1].ns, "Total Cost");
+  EXPECT_EQ(received_msg.markers[41].ns, "CriticA");
+  EXPECT_EQ(received_msg.markers[81].ns, "CriticB");
+  EXPECT_FLOAT_EQ(received_msg.markers[41].color.g, 1.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[80].color.r, 1.0f);
+  // Trajectory 0 of critic B is above lethal (grey), trajectory 5 exactly lethal (black),
+  // others are the cheapest (green)
+  EXPECT_FLOAT_EQ(received_msg.markers[81].color.g, 0.5f);
+  EXPECT_FLOAT_EQ(received_msg.markers[81].color.r, 0.5f);
+  EXPECT_FLOAT_EQ(received_msg.markers[82].color.g, 0.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[82].color.r, 0.0f);
+  EXPECT_FLOAT_EQ(received_msg.markers[83].color.g, 1.0f);
+
+  // Marker ids are unique so namespaces don't overwrite each other
+  std::set<int> ids;
+  for (size_t i = 1; i < received_msg.markers.size(); ++i) {
+    ids.insert(received_msg.markers[i].id);
+  }
+  EXPECT_EQ(ids.size(), 120u);
 }
 
 TEST(TrajectoryVisualizerTests, VisOptimalPath)

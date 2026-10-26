@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -51,6 +52,15 @@ struct CriticData
   std::shared_ptr<MotionModel> motion_model;
   std::optional<std::vector<bool>> path_pts_valid;
   std::optional<size_t> furthest_reached_path_point;
+  // Optional human-readable reason, set by a critic together with fail_flag
+  std::string fail_reason{};
+  // Set by CriticManager when the per-critic debug info is being collected. Critics should fill
+  // debug_info only if it is true, as building the strings costs time
+  bool collect_debug_info{false};
+  // Optional per-trajectory text explaining the cost a critic gave (e.g. the worst case it found),
+  // shown when hovering the trajectory in visualize_critic_stats.py. Empty or one entry per
+  // trajectory; CriticManager clears it before each critic and stores it with that critic's costs
+  std::vector<std::string> debug_info{};
 };
 
 }  // namespace mppi

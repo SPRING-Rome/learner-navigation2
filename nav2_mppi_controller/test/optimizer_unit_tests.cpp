@@ -360,6 +360,60 @@ TEST(OptimizerTests, FallbackTests)
   EXPECT_THROW(optimizer_tester.fallbackWrapper(true), std::runtime_error);
 }
 
+TEST(OptimizerTests, FailureCallbackTests)
+{
+  auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("my_node");
+  OptimizerTester optimizer_tester;
+  node->declare_parameter("controller_frequency", rclcpp::ParameterValue(30.0));
+  node->declare_parameter("mppic.batch_size", rclcpp::ParameterValue(1000));
+  node->declare_parameter("mppic.time_steps", rclcpp::ParameterValue(50));
+  node->declare_parameter("mppic.retry_attempt_limit", rclcpp::ParameterValue(1));
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  std::string name = "test";
+  ParametersHandler param_handler(node, name);
+  rclcpp_lifecycle::State lstate;
+  costmap_ros->on_configure(lstate);
+  optimizer_tester.initialize(node, "mppic", costmap_ros, &param_handler);
+
+  std::vector<std::pair<bool, uint32_t>> calls;  // (fatal, attempt when called)
+  optimizer_tester.setFailureCallback(
+    [&](bool fatal) {calls.emplace_back(fatal, optimizer_tester.getAttempt());});
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.pose.position.x = 999;
+  geometry_msgs::msg::Twist speed;
+  speed.linear.y = 4.0;
+  nav_msgs::msg::Path path;
+  geometry_msgs::msg::Pose goal;
+  path.poses.resize(17);
+  EXPECT_EQ(optimizer_tester.getCycleId(), 0u);
+  optimizer_tester.testPrepare(pose, speed, path, goal, nullptr);
+  EXPECT_EQ(optimizer_tester.getCycleId(), 1u);
+  EXPECT_EQ(optimizer_tester.getAttempt(), 0u);
+
+  // Not called while debug collection is disabled
+  EXPECT_TRUE(optimizer_tester.fallbackWrapper(true));
+  EXPECT_TRUE(calls.empty());
+  EXPECT_EQ(optimizer_tester.getAttempt(), 1u);
+
+  // Called before the reset, flagging the failure that throws
+  optimizer_tester.setCollectDebugInfo(true);
+  EXPECT_THROW(optimizer_tester.fallbackWrapper(true), std::runtime_error);
+  ASSERT_EQ(calls.size(), 1u);
+  EXPECT_TRUE(calls[0].first);
+  EXPECT_EQ(calls[0].second, 1u);
+
+  // A new cycle restarts the attempts and its first failure can be retried
+  optimizer_tester.testPrepare(pose, speed, path, goal, nullptr);
+  EXPECT_EQ(optimizer_tester.getCycleId(), 2u);
+  EXPECT_EQ(optimizer_tester.getAttempt(), 0u);
+  EXPECT_TRUE(optimizer_tester.fallbackWrapper(true));
+  ASSERT_EQ(calls.size(), 2u);
+  EXPECT_FALSE(calls[1].first);
+  EXPECT_EQ(calls[1].second, 0u);
+}
+
 TEST(OptimizerTests, PrepareTests)
 {
   auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("my_node");

@@ -24,6 +24,7 @@
 #include "nav2_mppi_controller/models/constraints.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
 
+#include "nav2_msgs/msg/critics_debug.hpp"
 #include "nav2_core/controller.hpp"
 #include "nav2_core/goal_checker.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -113,18 +114,27 @@ protected:
     const builtin_interfaces::msg::Time & cmd_stamp,
     const Eigen::ArrayXXf & optimal_trajectory);
 
+  /**
+    * @brief Publish the debug message with the costs of all trajectories for each critic
+    * @param result CriticsDebug result of the attempt
+    */
+  void publishCriticsDebug(uint8_t result);
+
   std::string name_;
   rclcpp_lifecycle::LifecycleNode::WeakPtr parent_;
   rclcpp::Logger logger_{rclcpp::get_logger("MPPIController")};
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   rclcpp_lifecycle::LifecyclePublisher<nav2_msgs::msg::Trajectory>::SharedPtr opt_traj_pub_;
+  rclcpp_lifecycle::LifecyclePublisher<nav2_msgs::msg::CriticsDebug>::SharedPtr critics_debug_pub_;
 
   std::unique_ptr<ParametersHandler> parameters_handler_;
   Optimizer optimizer_;
   PathHandler path_handler_;
   TrajectoryVisualizer trajectory_visualizer_;
 
+  std_msgs::msg::Header debug_header_;
+  bool publish_debug_{false};
   bool visualize_;
   bool publish_optimal_trajectory_;
 };
