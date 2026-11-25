@@ -25,6 +25,7 @@
 #include "nav_2d_utils/tf_help.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "nav2_util/geometry_utils.hpp"
+#include "nav2_util/loop_rate.hpp"
 #include "nav2_controller/controller_server.hpp"
 
 using namespace std::chrono_literals;
@@ -469,7 +470,7 @@ void ControllerServer::computeControl()
     progress_checkers_[current_progress_checker_]->reset();
 
     last_valid_cmd_time_ = now();
-    rclcpp::WallRate loop_rate(controller_frequency_);
+    nav2_util::LoopRate loop_rate(controller_frequency_, get_clock());
     while (rclcpp::ok()) {
       auto start_time = this->now();
 

@@ -29,6 +29,7 @@
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/create_timer_ros.h"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav2_util/loop_rate.hpp"
 #include "nav2_util/robot_utils.hpp"
 #include "nav2_util/twist_publisher.hpp"
 #include "nav2_util/simple_action_server.hpp"
@@ -235,7 +236,7 @@ protected:
     }
 
     auto start_time = clock_->now();
-    rclcpp::WallRate loop_rate(cycle_frequency_);
+    nav2_util::LoopRate loop_rate(cycle_frequency_, clock_);
 
     while (rclcpp::ok()) {
       elapsed_time_ = clock_->now() - start_time;
